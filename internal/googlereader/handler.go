@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"miniflux.app/v2/internal/config"
+	"miniflux.app/v2/internal/crypto"
 	"miniflux.app/v2/internal/http/request"
 	"miniflux.app/v2/internal/http/response"
 	"miniflux.app/v2/internal/http/response/json"
@@ -210,6 +211,7 @@ func (r RequestModifiers) String() string {
 func Serve(router *mux.Router, store *storage.Storage) {
 	handler := &handler{store, router}
 	router.HandleFunc("/accounts/ClientLogin", handler.clientLoginHandler).Methods(http.MethodPost).Name("ClientLogin")
+	router.HandleFunc("/reader/api/0/icon/{iconHmac}", handler.iconHandler).Methods(http.MethodGet).Name("Icon")
 
 	middleware := newMiddleware(store)
 	sr := router.PathPrefix("/reader/api/0").Subrouter()
@@ -727,6 +729,49 @@ func (h *handler) quickAddHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *handler) iconHandler(w http.ResponseWriter, r *http.Request) {
+	clientIP := request.ClientIP(r)
+	iconHmac := request.RouteStringParam(r, "iconHmac")
+
+	slog.Debug("[GoogleReader] Handle /icon/{iconHmac}",
+		slog.String("handler", "iconHandler"),
+		slog.String("client_ip", clientIP),
+		slog.String("user_agent", r.UserAgent()),
+		slog.String("icon_hmac", iconHmac),
+	)
+
+	icons, err := h.store.GoogleReaderGetIcons()
+	if err != nil {
+		json.ServerError(w, r, err)
+		return
+	}
+
+	var icon *model.Icon
+
+	for _, i := range icons {
+		expectedHmac := feedIconHmac(i.Salt, i.Icon.ID)
+		if expectedHmac == iconHmac {
+			icon = &i.Icon
+			break
+		}
+	}
+
+	if icon == nil {
+		json.NotFound(w, r)
+		return
+	}
+
+	response.New(w, r).WithCaching(icon.Hash, 72*time.Hour, func(b *response.Builder) {
+		b.WithHeader("Content-Security-Policy", `default-src 'self'`)
+		b.WithHeader("Content-Type", icon.MimeType)
+		b.WithBody(icon.Content)
+		if icon.MimeType != "image/svg+xml" {
+			b.WithoutCompression()
+		}
+		b.Write()
+	})
+}
+
 func getFeed(stream Stream, store *storage.Storage, userID int64) (*model.Feed, error) {
 	feedID, err := strconv.ParseInt(stream.ID, 10, 64)
 	if err != nil {
@@ -825,6 +870,19 @@ func move(stream Stream, destination Stream, store *storage.Storage, userID int6
 	}
 	feedModification.Patch(feed)
 	return store.UpdateFeed(feed)
+}
+
+func (h *handler) feedIconURL(salt string, f *model.Feed) string {
+	if f.Icon != nil && f.Icon.IconID != 0 {
+		iconHmac := feedIconHmac(salt, f.Icon.IconID)
+		return config.Opts.RootURL() + route.Path(h.router, "Icon", "iconHmac", iconHmac)
+	} else {
+		return ""
+	}
+}
+
+func feedIconHmac(salt string, iconID int64) string {
+	return crypto.GenerateSHA256Hmac(salt, []byte(strconv.FormatInt(iconID, 10)))
 }
 
 func (h *handler) editSubscriptionHandler(w http.ResponseWriter, r *http.Request) {
@@ -1208,6 +1266,13 @@ func (h *handler) subscriptionListHandler(w http.ResponseWriter, r *http.Request
 		json.ServerError(w, r, err)
 		return
 	}
+
+	integration, err := h.store.Integration(userID)
+	if err != nil {
+		json.ServerError(w, r, err)
+		return
+	}
+
 	result.Subscriptions = make([]subscription, 0)
 	for _, feed := range feeds {
 		result.Subscriptions = append(result.Subscriptions, subscription{
@@ -1216,7 +1281,7 @@ func (h *handler) subscriptionListHandler(w http.ResponseWriter, r *http.Request
 			URL:        feed.FeedURL,
 			Categories: []subscriptionCategory{{fmt.Sprintf(UserLabelPrefix, userID) + feed.Category.Title, feed.Category.Title, "folder"}},
 			HTMLURL:    feed.SiteURL,
-			IconURL:    "", // TODO: Icons are base64 encoded in the DB.
+			IconURL:    h.feedIconURL(integration.GoogleReaderSalt, feed),
 		})
 	}
 	json.OK(w, r, result)

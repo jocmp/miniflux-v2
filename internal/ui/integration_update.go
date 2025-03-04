@@ -56,6 +56,10 @@ func (h *handler) updateIntegration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if integration.GoogleReaderEnabled {
+		if integration.GoogleReaderSalt == "" {
+			integration.GoogleReaderSalt = crypto.GenerateRandomStringHex(20)
+		}
+
 		if integrationForm.GoogleReaderPassword != "" {
 			integration.GoogleReaderPassword, err = crypto.HashPassword(integrationForm.GoogleReaderPassword)
 			if err != nil {

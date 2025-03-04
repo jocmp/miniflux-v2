@@ -5,6 +5,8 @@ package database // import "miniflux.app/v2/internal/database"
 
 import (
 	"database/sql"
+
+	"miniflux.app/v2/internal/crypto"
 )
 
 var schemaVersion = len(migrations)
@@ -1013,6 +1015,24 @@ var migrations = []func(tx *sql.Tx, driver string) error{
 			ALTER TABLE feeds ADD COLUMN ntfy_topic text default '';
 		`
 		_, err = tx.Exec(sql)
+		return err
+	},
+	func(tx *sql.Tx, _ string) (err error) {
+		sql := `
+				ALTER TABLE integrations ADD COLUMN googlereader_salt text default '';
+		`
+		_, err = tx.Exec(sql)
+		if err != nil {
+			return err
+		}
+
+		sql = `
+				UPDATE integrations
+				SET googlereader_salt = $1
+				WHERE googlereader_enabled = true;
+		`
+		_, err = tx.Exec(sql, crypto.GenerateRandomStringHex(20))
+
 		return err
 	},
 }

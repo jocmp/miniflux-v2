@@ -22,6 +22,7 @@ type Integration struct {
 	GoogleReaderEnabled              bool
 	GoogleReaderUsername             string
 	GoogleReaderPassword             string
+	GoogleReaderSalt                 string
 	WallabagEnabled                  bool
 	WallabagOnlyURL                  bool
 	WallabagURL                      string
@@ -117,3 +118,10 @@ type Integration struct {
 	PushoverDevice                   string
 	PushoverPrefix                   string
 }
+
+type GoogleReaderIcon struct {
+	Salt string
+	Icon Icon
+}
+
+type GoogleReaderIcons []*GoogleReaderIcon
